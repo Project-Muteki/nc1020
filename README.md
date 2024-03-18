@@ -4,7 +4,7 @@
 
 ## Details
 
-This is a port of the ["cross-platform" version of NC1020 emulator](https://github.com/Wang-Yue/NC1020), originally developed by Wang-Yue (which is based on some Chinese code of unknown origin). I made it even more cross-platform by introducing a HAL layer that handles page I/O, and wrote a HAL implementation targeting the toolchain I developed for Besta RTOS. When page swapping is light and built in release mode, it can manage about 50% speed on weak Arm7-based machines like BA110 and more than 100% on powerful machines like BA742.
+This is a port of the ["cross-platform" version of NC1020 emulator](https://github.com/Wang-Yue/NC1020), originally developed by Wang-Yue (which is based on some Chinese code of unknown origin). I made it even more cross-platform by introducing a HAL layer that handles page I/O, and wrote a HAL implementation targeting the toolchain I developed for Besta RTOS. When the emulator is built in release mode and on scenes where page swapping is light, it can manage about 50% speed on weak Arm7-based machines like BA110 and more than 100% on powerful machines like BA742.
 
 The project is in proof-of-concept stage and quite a lot of things needs to be finished and/or can be optimized further.
 
