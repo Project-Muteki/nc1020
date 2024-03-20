@@ -91,6 +91,7 @@ public:
 extern void Initialize(IWqxHal *);
 extern void Reset();
 extern void SetKey(uint8_t, bool);
+extern void ReleaseAllKeys();
 extern void RunTimeSlice(uint32_t, bool);
 extern bool CopyLcdBuffer(uint8_t*);
 extern void LoadNC1020();

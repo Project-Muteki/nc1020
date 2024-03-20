@@ -695,6 +695,10 @@ void SetKey(uint8_t key_id, bool down_or_up){
 	}
 }
 
+void ReleaseAllKeys() {
+    memset(keypad_matrix, 0, 8);
+}
+
 bool CopyLcdBuffer(uint8_t* buffer){
 	if (lcd_addr == 0) return false;
 	memcpy(buffer, ram_buff + lcd_addr, 1600);

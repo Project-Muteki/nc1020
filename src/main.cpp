@@ -4,8 +4,20 @@
 #include <cstdint>
 #include <muteki/file.h>
 #include <muteki/memory.h>
+#include <muteki/system.h>
+#include <muteki/threading.h>
 #include <muteki/ui/canvas.h>
 #include <muteki/ui/event.h>
+
+const key_press_event_config_t KEY_EVENT_CONFIG_DRAIN = {65535, 65535, 1};
+const key_press_event_config_t KEY_EVENT_CONFIG_TURBO = {0, 0, 0};
+
+const char ROM_FILE = "C:\\rom.bin";
+const char NOR_FILE = "C:\\nor.bin";
+const char BBS_FILE = "C:\\bbs.bin";
+const char STATE_FILE = "C:\\nc1020.sts";
+
+const uint8_t KEYMAP_ARROWS[4] = {0x3f, 0x1a, 0x1f, 0x1b}; // KEY_LEFT - KEY_DOWN
 
 class WqxHalBesta : public wqx::IWqxHal {
 public:
@@ -88,7 +100,7 @@ bool WqxHalBesta::loadBbsPage(uint32_t volume, uint32_t page) {
 }
 
 bool WqxHalBesta::saveState(const char *states, size_t size) {
-    void *statesFile = _afopen("C:\\nc1020.sts", "wb+");
+    void *statesFile = _afopen(STATE_FILE, "wb+");
     if (statesFile == nullptr) {
         return false;
     }
@@ -98,7 +110,7 @@ bool WqxHalBesta::saveState(const char *states, size_t size) {
 }
 
 bool WqxHalBesta::loadState(char *states, size_t size) {
-    void *statesFile = _afopen("C:\\nc1020.sts", "rb");
+    void *statesFile = _afopen(STATE_FILE, "rb");
     if (statesFile == nullptr) {
         return false;
     }
@@ -109,13 +121,13 @@ bool WqxHalBesta::loadState(char *states, size_t size) {
 
 bool WqxHalBesta::ensureOpen() {
     if (norFile == nullptr) {
-        norFile = _afopen("C:\\nor.bin", "rb+");
+        norFile = _afopen(NOR_FILE, "rb+");
     }
     if (romFile == nullptr) {
-        romFile = _afopen("C:\\rom.bin", "rb");
+        romFile = _afopen(ROM_FILE, "rb");
     }
     if (bbsFile == nullptr) {
-        bbsFile = _afopen("C:\\bbs.bin", "rb");
+        bbsFile = _afopen(BBS_FILE, "rb");
     }
     if (norFile == nullptr || romFile == nullptr || bbsFile == nullptr) {
         closeAll();
@@ -141,10 +153,67 @@ void WqxHalBesta::closeAll() {
     }
 }
 
+event_t *ticker_event = nullptr;
+short pressing0 = 0, pressing1 = 0;
+
+static inline bool test_events_no_shift(ui_event_t *uievent) {
+    // Deactivate shift key because it may cause the keycode to change.
+    // This means we need to handle shift behavior ourselves (if we really need it) but that's a fair tradeoff.
+    SetShiftState(TOGGLE_KEY_INACTIVE);
+    return TestPendEvent(uievent) || TestKeyEvent(uievent);
+}
+
+void ext_ticker() {
+    static auto uievent = ui_event_t();
+    bool hit = false;
+
+    while (test_events_no_shift(&uievent)) {
+        hit = true;
+        if (GetEvent(&uievent) && uievent.event_type == 0x10) {
+            pressing0 = uievent.key_code0;
+            pressing1 = uievent.key_code1;
+        } else {
+            ClearEvent(&uievent);
+        }
+    }
+
+    if (!hit) {
+        pressing0 = 0;
+        pressing1 = 0;
+    }
+
+    OSSetEvent(ticker_event);
+}
+
+void drain_all_events() {
+    auto uievent = ui_event_t();
+    size_t silence_count = 0;
+    while (silence_count < 60) {
+        bool test = (TestPendEvent(&uievent) || TestKeyEvent(&uievent));
+        if (test) {
+            ClearAllEvents();
+            silence_count = 0;
+        }
+        OSSleep(1);
+        silence_count++;
+    }
+}
+
+short map_key_binding(short key) {
+    if (key >= KEY_LEFT && key <= KEY_DOWN) {
+        return KEYMAP_ARROWS[key - KEY_LEFT];
+    }
+    return -1;
+}
+
 int main() {
+    auto old_hold_cfg = key_press_event_config_t();
+
     rgbSetBkColor(0xffffff);
     ClearScreen(false);
-    
+
+    ticker_event = OSCreateEvent(0, 0);
+
     size_t allocSize = GetImageSizeExt(160, 80, 1);
     lcd_surface_t *fb = reinterpret_cast<lcd_surface_t *>(lcalloc(1, allocSize));
     InitGraphic(fb, 160, 80, 1);
@@ -165,29 +234,47 @@ int main() {
     wqx::Initialize(&hal);
     wqx::LoadNC1020();
 
-    ui_event_t uievent = {
-        .unk0 = 0,
-        .event_type = 0,
-        .key_code0 = 0,
-        .key_code1 = 0,
-        .usb_data = nullptr,
-        .unk16 = nullptr,
-        .unk20 = nullptr,
-    };
+    // Set up "spam key press as key down" handler
+    GetSysKeyState(&old_hold_cfg);
+    SetTimer1IntHandler(&ext_ticker, 3);
+    SetSysKeyState(&KEY_EVENT_CONFIG_TURBO);
 
     while (true) {
-        // TODO fix the timing here
-        wqx::RunTimeSlice(33, false);
-        if ((TestPendEvent(&uievent) || TestKeyEvent(&uievent)) && GetEvent(&uievent)) {
-            if (uievent.key_code0 == KEY_ESC) {
-                break;
-            }
+        if (OSWaitForEvent(ticker_event, 10000) != WAIT_RESULT_RESOLVED) {
+            OSCloseEvent(ticker_event);
+            hal.closeAll();
+            _lfree(fb);
+            return 1;
         }
+
+        // TODO Change this to a less useful key
+        if (pressing0 == KEY_ESC) {
+            break;
+        }
+
+        // Handle key presses
+        // TODO handle pressing1 as well
+        short target_key_code = map_key_binding(pressing0);
+        if (target_key_code >= 0) {
+            wqx::SetKey(target_key_code, true);
+        } else {
+            wqx::ReleaseAllKeys();
+        }
+
+        // Run emulator and draw LCD
+        wqx::RunTimeSlice(30, false);
         wqx::CopyLcdBuffer(reinterpret_cast<uint8_t *>(fb->buffer));
         ShowGraphic(offsetx, offsety, fb, BLIT_NONE);
     }
+    
+    // Drain all problematic events that might raise and revert to normal key press behavior
+    SetSysKeyState(&KEY_EVENT_CONFIG_DRAIN);
+    SetTimer1IntHandler(NULL, 0);
+    drain_all_events();
+    SetSysKeyState(&old_hold_cfg);
 
     wqx::SaveNC1020();
+    OSCloseEvent(ticker_event);
     hal.closeAll();
     _lfree(fb);
     return 0;
