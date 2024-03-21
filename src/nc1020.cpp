@@ -82,8 +82,6 @@ struct nc1020_states_t {
 
 static IWqxHal *hal = nullptr;
 
-static uint8_t shadowedBbsCache[0x2000];
-
 static uint8_t* memmap[8];
 static nc1020_states_t nc1020_states;
 
@@ -165,12 +163,7 @@ void SwitchVolume(){
 	uint8_t volume_idx = ram_io[0x0D];
 	volume_idx = volume_idx > 2 ? 0 : volume_idx;
 
-    // Load shadowed bbs to 0xe000
-    hal->loadBbsPage(0, 1);
-    memcpy(shadowedBbsCache, hal->bbs, sizeof(hal->bbs));
-    memmap[7] = shadowedBbsCache;
-
-    // Load normal bbs (except when hitting the shadowed page then we map ram_page3) to 0xc000
+    // Load normal bbs (except when hitting the shadowed page then we map ram_page3) to 0xc000 and shadowed bbs to 0xe000
     uint8_t roa_bbs = ram_io[0x0A] & 0x0f;
     memmap[1] = (roa_bbs & 0x04 ? ram_page2 : ram_page1);
     if (volume_idx == 0 && roa_bbs == 1) {
@@ -179,6 +172,7 @@ void SwitchVolume(){
         hal->loadBbsPage(volume_idx, roa_bbs);
         memmap[6] = hal->bbs;
     }
+    memmap[7] = hal->shadowBbs;
 
     SwitchBank();
 }

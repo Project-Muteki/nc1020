@@ -9,19 +9,22 @@ namespace wqx {
  * @brief Interface for HAL.
  * @details
  * Implement this for your OS/board and pass an instance to Initialize() to get started.
- *
- * Each HAL requires at least ~40KiB of memory for the page and bbs scratch buffers.
  */
 class IWqxHal {
 public:
     /**
-     * @brief Page scratch pad buffer.
+     * @brief Page scratch pad buffer (0x8000 bytes long).
      */
-    uint8_t page[0x8000];
+    uint8_t *page;
     /**
-     * @brief BBS scratch pad buffer.
+     * @brief BBS scratch pad buffer (0x2000 bytes long).
      */
-    uint8_t bbs[0x2000];
+    uint8_t *bbs;
+
+    /**
+     * @brief Shadowed BBS scratch pad buffer (0x2000 bytes long).
+     */
+    uint8_t *shadowBbs;
 
     IWqxHal();
     /**

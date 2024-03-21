@@ -2,6 +2,7 @@
 
 #include <cstring>
 #include <cstdint>
+#include <cstdlib>
 #include <muteki/file.h>
 #include <muteki/memory.h>
 #include <muteki/system.h>
@@ -12,12 +13,24 @@
 const key_press_event_config_t KEY_EVENT_CONFIG_DRAIN = {65535, 65535, 1};
 const key_press_event_config_t KEY_EVENT_CONFIG_TURBO = {0, 0, 0};
 
-const char ROM_FILE = "C:\\rom.bin";
-const char NOR_FILE = "C:\\nor.bin";
-const char BBS_FILE = "C:\\bbs.bin";
-const char STATE_FILE = "C:\\nc1020.sts";
+const char ROM_FILE[] = "C:\\rom.bin";
+const char NOR_FILE[] = "C:\\nor.bin";
+const char BBS_FILE[] = "C:\\bbs.bin";
+const char STATE_FILE[] = "C:\\nc1020.sts";
 
 const uint8_t KEYMAP_ARROWS[4] = {0x3f, 0x1a, 0x1f, 0x1b}; // KEY_LEFT - KEY_DOWN
+
+static const uint8_t FLAG_ROM_VOLUME_0 = 0b000;
+static const uint8_t FLAG_ROM_VOLUME_1 = 0b001;
+static const uint8_t FLAG_ROM_VOLUME_2 = 0b010;
+static const uint8_t FLAG_NOR = 0b011;
+static const uint8_t FLAG_NOR_DIRTY = 0b100;
+
+struct CacheBlock {
+    uint8_t flags; // xxxxxdVV. d: NOR page dirty, V: Volume number, 3 means NOR.
+    uint8_t page;
+    uint8_t data[0x8000];
+};
 
 class WqxHalBesta : public wqx::IWqxHal {
 public:
@@ -31,36 +44,161 @@ public:
     virtual bool loadState(char *states, size_t size) override;
     void closeAll();
     bool ensureOpen();
+    bool begin(size_t cacheSize);
 private:
+    unsigned short getNorCacheIndex(uint32_t page);
+    void setNorCacheIndex(uint32_t page, unsigned short index);
+    unsigned short getRomCacheIndex(uint32_t volume, uint32_t page);
+    void setRomCacheIndex(uint32_t volume, uint32_t page, unsigned short index);
+    CacheBlock *claimPage(unsigned short cacheIndex);
+
     void *romFile;
     void *norFile;
     void *bbsFile;
+    size_t firstOut;
+    size_t cacheSize;
+    int8_t currentMappedNorPage;
+    CacheBlock **cacheBlockTable;
+    CacheBlock *cacheBlock;
+    uint8_t romIndexLow[0x80 * 3];
+    uint32_t romIndexHigh[0x80 * 3 / 32];
+    uint8_t norIndexLow[0x20];
+    uint32_t norIndexHigh;
+    uint8_t bbsCache[0x20000];
+
+    static constexpr unsigned short CACHE_INDEX_UNUSED = 0x1ff;
 };
 
-WqxHalBesta::WqxHalBesta(): romFile(nullptr), norFile(nullptr) {}
+WqxHalBesta::WqxHalBesta(): romFile(nullptr), norFile(nullptr), bbsFile(nullptr), firstOut(0), cacheSize(0),
+                            currentMappedNorPage(-1), cacheBlockTable(nullptr), cacheBlock(nullptr), romIndexLow{0},
+                            romIndexHigh{0}, norIndexLow{0}, norIndexHigh(0xffffffff), bbsCache{0} {}
+
+bool WqxHalBesta::begin(size_t cacheSize) {
+    cacheBlock = reinterpret_cast<CacheBlock *>(lmalloc(cacheSize * sizeof(CacheBlock)));
+    cacheBlockTable = reinterpret_cast<CacheBlock **>(lcalloc(1, sizeof(CacheBlock *) * cacheSize));
+    std::memset(romIndexLow, 0xff, sizeof(romIndexLow));
+    std::memset(romIndexHigh, 0xff, sizeof(romIndexHigh));
+    std::memset(norIndexLow, 0xff, sizeof(norIndexLow));
+    this->cacheSize = cacheSize;
+    return true;
+}
+
+unsigned short WqxHalBesta::getNorCacheIndex(uint32_t page) {
+    unsigned short result = norIndexLow[page] | ((norIndexHigh >> page) & 1) << 8;
+    //Printf("norcache %d -> %#x\n", page, result);
+    return result;
+}
+
+void WqxHalBesta::setNorCacheIndex(uint32_t page, unsigned short index) {
+    //Printf("norcache %d <- %#x\n", page, index);
+    uint8_t newHigh = (index >> 8) & 1;
+    norIndexLow[page] = index & 0xff;
+    norIndexHigh &= ~(1 << page);
+    norIndexHigh |= (newHigh << page);
+}
+
+unsigned short WqxHalBesta::getRomCacheIndex(uint32_t volume, uint32_t page) {
+    uint32_t pageAddress = volume * 0x80 + page;
+    uint32_t romIndexHighOffset = pageAddress / 32;
+    uint32_t romIndexHighShift = pageAddress % 32;
+    unsigned short result = romIndexLow[pageAddress] | ((romIndexHigh[romIndexHighOffset] >> romIndexHighShift) & 1) << 8;
+    //Printf("romcache %d %d -> %#x\n", volume, page, result);
+    return result;
+}
+
+void WqxHalBesta::setRomCacheIndex(uint32_t volume, uint32_t page, unsigned short index) {
+    //Printf("romcache %d %d <- %#x\n", volume, page, index);
+    uint8_t newHigh = (index >> 8) & 1;
+    uint32_t pageAddress = volume * 0x80 + page;
+    uint32_t romIndexHighOffset = pageAddress / 32;
+    uint32_t romIndexHighShift = pageAddress % 32;
+    romIndexLow[pageAddress] = index & 0xff;
+    romIndexHigh[romIndexHighOffset] &= ~(1 << romIndexHighShift);
+    romIndexHigh[romIndexHighOffset] |= (newHigh << romIndexHighShift);
+}
+
+CacheBlock *WqxHalBesta::claimPage(unsigned short cacheIndex) {
+    // Claim a previously used or unused page. Will perform eviction when necessary.
+    CacheBlock *cachedPage = cacheBlockTable[cacheIndex];
+    if (cachedPage == nullptr) {
+        //Printf("Index %d is unused\n", cacheIndex);
+        // Previously unused. Fix link.
+        cacheBlockTable[cacheIndex] = &cacheBlock[cacheIndex];
+        cachedPage = cacheBlockTable[cacheIndex];
+    } else if (cachedPage->flags >= FLAG_ROM_VOLUME_0 && cachedPage->flags <= FLAG_ROM_VOLUME_2) {
+        // Previously used as a ROM page.
+        //Printf("Index %d is ROM\n", cacheIndex);
+        setRomCacheIndex(cachedPage->flags, cachedPage->page, CACHE_INDEX_UNUSED);
+    } else if ((cachedPage->flags & FLAG_NOR) == FLAG_NOR) {
+        //Printf("Index %d is ", cacheIndex);
+        if (cachedPage->flags & FLAG_NOR_DIRTY) {
+            //Printf("uncommitted ");
+            // Previously used as a NOR page with uncommitted changes.
+            __fseek(norFile, cachedPage->page * 0x8000, _SYS_SEEK_SET);
+            _fwrite(cachedPage->data, 1, 0x8000, norFile);
+        };
+        //Printf("NOR\n");
+        setNorCacheIndex(cachedPage->page, CACHE_INDEX_UNUSED);
+    } else {
+        // Something is wrong. Possibly data corruption or logical error.
+        //Printf("Error\n");
+        return nullptr;
+    }
+    return cachedPage;
+}
 
 bool WqxHalBesta::loadNorPage(uint32_t page) {
     if (page > 0x1f || !ensureOpen()) {
         return false;
     }
-    __fseek(norFile, page * 0x8000, _SYS_SEEK_SET);
-    if (_fread(this->page, 1, sizeof(this->page), norFile) != sizeof(this->page)) {
+
+    //Printf("nor %d\n", page);
+    unsigned short cached = getNorCacheIndex(page);
+    if (cached != CACHE_INDEX_UNUSED && cached >= cacheSize) {
         return false;
     }
+
+    if (cached == CACHE_INDEX_UNUSED) {
+        // Cache miss
+        cached = firstOut;
+        auto claimedPage = claimPage(cached);
+        if (claimedPage == nullptr) {
+            return false;
+        }
+        setNorCacheIndex(page, cached);
+        claimedPage->flags = FLAG_NOR;
+        claimedPage->page = page;
+        this->page = claimedPage->data;
+        __fseek(norFile, page * 0x8000, _SYS_SEEK_SET);
+        if (_fread(this->page, 1, 0x8000, norFile) != 0x8000) {
+            return false;
+        }
+        firstOut++;
+        if (firstOut >= cacheSize) {
+            firstOut = 0;
+        }
+    } else {
+        // Cache hit
+        this->page = cacheBlockTable[cached]->data;
+    }
+
+    currentMappedNorPage = page;
     return true;
 }
 
 bool WqxHalBesta::saveNorPage(uint32_t page) {
-    if (page > 0x1f || !ensureOpen()) {
+    (void) page;
+    if (!ensureOpen()) {
         return false;
     }
-    __fseek(norFile, page * 0x8000, _SYS_SEEK_SET);
-    _fwrite(this->page, 1, sizeof(this->page), norFile);
-    //__fflush(norFile);
+    auto cached = getNorCacheIndex(currentMappedNorPage);
+    cacheBlockTable[cached]->flags |= FLAG_NOR_DIRTY;
     return true;
 }
 
 bool WqxHalBesta::eraseNorPage(uint32_t page, uint32_t count) {
+    // TODO remove this and change it to a fixed wipe function.
+    /*
     if ((page > 0x1f && (count > 0x20 - page)) || !ensureOpen()) {
         return false;
     }
@@ -68,11 +206,15 @@ bool WqxHalBesta::eraseNorPage(uint32_t page, uint32_t count) {
         return true;
     }
     __fseek(norFile, page * 0x8000, _SYS_SEEK_SET);
-    memset(this->page, 0xff, sizeof(this->page));
+    memset(this->page, 0xff, 0x8000);
     for (size_t i = 0; i < count; i++) {
-        _fwrite(this->page, 1, sizeof(this->page), norFile);
+        _fwrite(this->page, 1, 0x8000, norFile);
     }
     //__fflush(norFile);
+    return true;
+    */
+    (void) page;
+    (void) count;
     return true;
 }
 
@@ -80,22 +222,47 @@ bool WqxHalBesta::loadRomPage(uint32_t volume, uint32_t page) {
     if (page > 0x7f || volume > 2 || !ensureOpen()) {
         return false;
     }
-    __fseek(romFile, (volume * 0x80 + page) * 0x8000, _SYS_SEEK_SET);
-    if (_fread(this->page, 1, sizeof(this->page), romFile) != sizeof(this->page)) {
+
+    //Printf("rom %d %d\n", volume, page);
+    unsigned short cached = getRomCacheIndex(volume, page);
+    if (cached != CACHE_INDEX_UNUSED && cached >= cacheSize) {
         return false;
     }
+
+    if (cached == CACHE_INDEX_UNUSED) {
+        // Cache miss
+        cached = firstOut;
+        auto claimedPage = claimPage(cached);
+        if (claimedPage == nullptr) {
+            return false;
+        }
+        setRomCacheIndex(volume, page, cached);
+        claimedPage->flags = volume;
+        claimedPage->page = page;
+        this->page = claimedPage->data;
+        __fseek(romFile, (volume * 0x80 + page) * 0x8000, _SYS_SEEK_SET);
+        if (_fread(this->page, 1, 0x8000, romFile) != 0x8000) {
+            return false;
+        }
+        firstOut++;
+        if (firstOut >= cacheSize) {
+            firstOut = 0;
+        }
+    } else {
+        // Cache hit
+        this->page = cacheBlockTable[cached]->data;
+    }
+
     return true;
 }
 
 bool WqxHalBesta::loadBbsPage(uint32_t volume, uint32_t page) {
     (void) volume;
-    if (page > 0x0f || !ensureOpen()) {
+    if (page > 0xf || volume > 2 || !ensureOpen()) {
         return false;
     }
-    __fseek(bbsFile, page * 0x2000, _SYS_SEEK_SET);
-    if (_fread(this->bbs, 1, sizeof(this->bbs), bbsFile) != sizeof(this->bbs)) {
-        return false;
-    }
+    this->bbs = &bbsCache[page * 0x2000];
+    this->shadowBbs = &bbsCache[0x2000];
     return true;
 }
 
@@ -128,8 +295,14 @@ bool WqxHalBesta::ensureOpen() {
     }
     if (bbsFile == nullptr) {
         bbsFile = _afopen(BBS_FILE, "rb");
+        _fread(bbsCache, 1, sizeof(bbsCache), bbsFile);
+        this->shadowBbs = &bbsCache[0x2000];
     }
     if (norFile == nullptr || romFile == nullptr || bbsFile == nullptr) {
+        closeAll();
+        return false;
+    }
+    if (cacheBlock == nullptr || cacheBlockTable == nullptr || this->cacheSize == 0) {
         closeAll();
         return false;
     }
@@ -139,6 +312,16 @@ bool WqxHalBesta::ensureOpen() {
 static WqxHalBesta hal;
 
 void WqxHalBesta::closeAll() {
+    for (uint8_t i=0; i<0x20; i++) {
+        auto index = getNorCacheIndex(i);
+        if (index != CACHE_INDEX_UNUSED) {
+            auto block = cacheBlockTable[index];
+            if (block != nullptr && block->flags & FLAG_NOR_DIRTY) {
+                __fseek(norFile, block->page * 0x8000, _SYS_SEEK_SET);
+                _fwrite(block->data, 1, 0x8000, norFile);
+            }
+        }
+    }
     if (norFile != nullptr) {
         _fclose(norFile);
         norFile = nullptr;
@@ -150,6 +333,14 @@ void WqxHalBesta::closeAll() {
     if (bbsFile != nullptr) {
         _fclose(bbsFile);
         bbsFile = nullptr;
+    }
+    if (cacheBlock != nullptr) {
+        _lfree(cacheBlock);
+        cacheBlock = nullptr;
+    }
+    if (cacheBlockTable != nullptr) {
+        _lfree(cacheBlockTable);
+        cacheBlockTable = nullptr;
     }
 }
 
@@ -226,6 +417,8 @@ int main() {
         fb->palette[0] = 0xffffff;
         fb->palette[1] = 0x000000;
     }
+
+    hal.begin(96);
 
     if (!hal.ensureOpen()) {
         return 1;
