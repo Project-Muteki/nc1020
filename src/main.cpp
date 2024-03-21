@@ -18,7 +18,15 @@ const char NOR_FILE[] = "C:\\nor.bin";
 const char BBS_FILE[] = "C:\\bbs.bin";
 const char STATE_FILE[] = "C:\\nc1020.sts";
 
-const uint8_t KEYMAP_ARROWS[4] = {0x3f, 0x1a, 0x1f, 0x1b}; // KEY_LEFT - KEY_DOWN
+const uint8_t KEYMAP_0x01[7] = {0x3b, 0x3f, 0x1a, 0x1f, 0x1b, 0x37, 0x1e}; // KEY_ESC - KEY_PGDN
+const uint8_t KEYMAP_ALPHABETS[26] = {
+    0x28, 0x34, 0x32, 0x2a, 0x22, 0x2b, 0x2c, 0x2d, 0x27, 0x2e, 0x2f, 0x19, 0x36,
+    0x35, 0x18, 0x1c, 0x20, 0x23, 0x29, 0x24, 0x26, 0x33, 0x21, 0x31, 0x25, 0x30,
+}; // KEY_A - KEY_Z
+const uint8_t KEYMAP_NUMBERS[10] = {
+    0x08, 0x10, 0x11, 0x12, 0x13, 0x0b, 0x0c, 0x0d, 0x0a, 0x09,
+    // time, F1, F2, F3, F4, dict, vcard, calc, calendar, exam
+}; // KEY_0 - KEY_9
 
 static const uint8_t FLAG_ROM_VOLUME_0 = 0b000;
 static const uint8_t FLAG_ROM_VOLUME_1 = 0b001;
@@ -391,8 +399,34 @@ void drain_all_events() {
 }
 
 short map_key_binding(short key) {
-    if (key >= KEY_LEFT && key <= KEY_DOWN) {
-        return KEYMAP_ARROWS[key - KEY_LEFT];
+    if (key >= KEY_ESC && key <= KEY_PGDN) {
+        return KEYMAP_0x01[key - KEY_ESC];
+    } else if (key >= KEY_A && key <= KEY_Z) {
+        return KEYMAP_ALPHABETS[key - KEY_A];
+    } else if (key >= KEY_0 && key <= KEY_9) {
+        return KEYMAP_NUMBERS[key - KEY_0];
+    } else {
+        switch (key) {
+        case KEY_SPACE:
+            return 0x3e; // space
+        case KEY_ENTER:
+            return 0x1d; // enter
+        case KEY_FONT:
+        case KEY_DOT:
+            return 0x3d; // .
+        case KEY_HELP:
+        case KEY_SAVE:
+            return 0x38; // help
+        case KEY_SHIFT:
+            return 0x39; // shift
+        case KEY_TAB:
+            return 0x3a; // caps (Besta shift modifier is not supported yet)
+        case KEY_MENU:
+            return 0x0e; // download
+        case KEY_SYMBOL:
+        case KEY_SEARCH:
+            return 0x3c; // symbol/0
+        }
     }
     return -1;
 }
@@ -440,8 +474,8 @@ int main() {
             return 1;
         }
 
-        // TODO Change this to a less useful key
-        if (pressing0 == KEY_ESC) {
+        if (pressing0 == KEY_HOME) {
+            // TODO add a timer so it will quit when user holds it for 100 ticks (~3s)
             break;
         }
 
