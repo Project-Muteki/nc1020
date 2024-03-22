@@ -42,14 +42,12 @@ public:
      */
     virtual bool saveNorPage(uint32_t page) = 0;
     /**
-     * @brief Erase NOR flash page.
-     * @details The page should be filled with 0xff after erasure.
-     * @param page Page number. Must be between `0x00` and `0x20` (inclusive-exclusive).
-     * @param count Number of pages to erase.
+     * @brief Erase the entire NOR flash.
+     * @details This erases the entire NOR flash to the all `0xff` state.
      * @retval true Success.
      * @retval false Failure.
      */
-    virtual bool eraseNorPage(uint32_t page, uint32_t count) = 0;
+    virtual bool wipeNorFlash() = 0;
     /**
      * @brief Map a page from mask ROM image to the scratch pad buffer IWqxHal::page.
      * @note GGV NC1020 defines page numbers starting from `0x80` as the ROM page number. The `page` parameter here

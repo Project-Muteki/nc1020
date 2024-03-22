@@ -205,6 +205,7 @@ uint8_t IO_API Read3B(uint8_t addr){
 }
 
 uint8_t IO_API Read3F(uint8_t addr){
+    (void) addr;
     uint8_t idx = ram_io[0x3E];
     return idx < 80 ? clock_buff[idx] : 0;
 }
@@ -517,7 +518,7 @@ inline void Store(uint16_t addr, uint8_t value) {
     } else if (fp_step == 5) {
         // Nuke the entire flash (and optionally NVRAM)
         if (addr == 0x5555 && value == 0x10) {
-            hal->eraseNorPage(0, 0x20);
+            hal->wipeNorFlash();
             if (fp_type == 5) {
                 memset(fp_buff, 0xFF, 0x100);
             }

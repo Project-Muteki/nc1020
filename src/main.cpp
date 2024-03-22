@@ -13,10 +13,10 @@
 const key_press_event_config_t KEY_EVENT_CONFIG_DRAIN = {65535, 65535, 1};
 const key_press_event_config_t KEY_EVENT_CONFIG_TURBO = {0, 0, 0};
 
-const char ROM_FILE[] = "C:\\rom.bin";
-const char NOR_FILE[] = "C:\\nor.bin";
-const char BBS_FILE[] = "C:\\bbs.bin";
-const char STATE_FILE[] = "C:\\nc1020.sts";
+const char ROM_FILE[] = "rom.bin";
+const char NOR_FILE[] = "nor.bin";
+const char BBS_FILE[] = "bbs.bin";
+const char STATE_FILE[] = "nc1020.sts";
 
 const uint8_t KEYMAP_0x01[7] = {0x3b, 0x3f, 0x1a, 0x1f, 0x1b, 0x37, 0x1e}; // KEY_ESC - KEY_PGDN
 const uint8_t KEYMAP_ALPHABETS[26] = {
@@ -45,7 +45,7 @@ public:
     WqxHalBesta();
     virtual bool loadNorPage(uint32_t page) override;
     virtual bool saveNorPage(uint32_t page) override;
-    virtual bool eraseNorPage(uint32_t page, uint32_t count) override;
+    virtual bool wipeNorFlash() override;
     virtual bool loadRomPage(uint32_t volume, uint32_t page) override;
     virtual bool loadBbsPage(uint32_t volume, uint32_t page) override;
     virtual bool saveState(const char *states, size_t size) override;
@@ -204,25 +204,30 @@ bool WqxHalBesta::saveNorPage(uint32_t page) {
     return true;
 }
 
-bool WqxHalBesta::eraseNorPage(uint32_t page, uint32_t count) {
-    // TODO remove this and change it to a fixed wipe function.
-    /*
-    if ((page > 0x1f && (count > 0x20 - page)) || !ensureOpen()) {
+bool WqxHalBesta::wipeNorFlash() {
+    char *fill = reinterpret_cast<char *>(lmalloc(512));
+    if (fill == nullptr) {
         return false;
     }
-    if (count == 0) {
-        return true;
+
+    // Clear all cached NOR pages
+    for (uint8_t i=0; i<0x20; i++) {
+        auto index = getNorCacheIndex(i);
+        if (index != CACHE_INDEX_UNUSED) {
+            auto block = cacheBlockTable[index];
+            if (block != nullptr && (block->flags & FLAG_NOR) == FLAG_NOR) {
+                std::memset(block->data, 0xff, sizeof(block->data));
+                block->flags &= ~FLAG_NOR_DIRTY;
+            }
+        }
     }
-    __fseek(norFile, page * 0x8000, _SYS_SEEK_SET);
-    memset(this->page, 0xff, 0x8000);
-    for (size_t i = 0; i < count; i++) {
-        _fwrite(this->page, 1, 0x8000, norFile);
+
+    // 0xff fill the NOR flash image
+    std::memset(fill, 0xff, 512);
+    for (size_t i = 0; i < 2048; i++) {
+        _fwrite(fill, 1, 512, norFile);
     }
-    //__fflush(norFile);
-    return true;
-    */
-    (void) page;
-    (void) count;
+    _lfree(fill);
     return true;
 }
 
@@ -320,6 +325,7 @@ bool WqxHalBesta::ensureOpen() {
 static WqxHalBesta hal;
 
 void WqxHalBesta::closeAll() {
+    // Flush all NOR pages marked as saved
     for (uint8_t i=0; i<0x20; i++) {
         auto index = getNorCacheIndex(i);
         if (index != CACHE_INDEX_UNUSED) {
@@ -327,6 +333,7 @@ void WqxHalBesta::closeAll() {
             if (block != nullptr && block->flags & FLAG_NOR_DIRTY) {
                 __fseek(norFile, block->page * 0x8000, _SYS_SEEK_SET);
                 _fwrite(block->data, 1, 0x8000, norFile);
+                block->flags &= ~FLAG_NOR_DIRTY;
             }
         }
     }
@@ -366,6 +373,7 @@ void ext_ticker() {
     static auto uievent = ui_event_t();
     bool hit = false;
 
+    // TODO this still seem to lose track presses on BA110. Find out why.
     while (test_events_no_shift(&uievent)) {
         hit = true;
         if (GetEvent(&uievent) && uievent.event_type == 0x10) {
@@ -433,6 +441,7 @@ short map_key_binding(short key) {
 
 int main() {
     auto old_hold_cfg = key_press_event_config_t();
+    uint32_t quit_ticks = 0;
 
     rgbSetBkColor(0xffffff);
     ClearScreen(false);
@@ -474,9 +483,15 @@ int main() {
             return 1;
         }
 
+        // TODO draw a bar for the tick counter
         if (pressing0 == KEY_HOME) {
-            // TODO add a timer so it will quit when user holds it for 100 ticks (~3s)
-            break;
+            quit_ticks++;
+            // 20 (~600ms) seems to be reliable. More than this and it'd sometimes lose track on BA110.
+            if (quit_ticks >= 20) {
+                break;
+            }
+        } else {
+            quit_ticks = 0;
         }
 
         // Handle key presses
@@ -491,6 +506,7 @@ int main() {
         // Run emulator and draw LCD
         wqx::RunTimeSlice(30, false);
         wqx::CopyLcdBuffer(reinterpret_cast<uint8_t *>(fb->buffer));
+        // TODO handle the LCD graphic segments (the 7seg counter, icons, scroll bar, etc.)
         ShowGraphic(offsetx, offsety, fb, BLIT_NONE);
     }
     
