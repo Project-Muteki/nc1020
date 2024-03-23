@@ -12,7 +12,7 @@ In the future, I may also branch off the NC1020 emulator used here into a standa
 
 ## Notes on the ROM format
 
-This port uses a simplified, slightly different ROM format than the typical one used by most emulators. They can be generated with the included script under scripts/gen_simplified.py.
+This port uses a simplified, slightly different ROM format than the typical one used by the official emulator and most 3rd-party emulators. They can be generated with the included script under `scripts/gen_simplified.py` from official emulator ROM files.
 
 ## Key binding
 
@@ -22,5 +22,6 @@ This port uses a simplified, slightly different ROM format than the typical one 
 
 - Trivial keys (i.e. alphabets, page up/down and arrow keys) are not explicitly labeled.
 - Keys labeled as `XXX` are currently unmapped.
-- The `MENU` key is the **function** menu (usually labeled as `功能` or roman numeral `I`), **not** the home menu.
-- The `SYMB`/`SRCH` key is an abbreviation for `Symbol` (`符号`)/`Search`.
+- The `MENU` key is the **function** menu key (usually labeled as `功能` or roman numeral `I`). Not to be confused with the home menu key (usually labeled as just `Menu` or `目录`).
+- To save and quit the emulator, press and hold the home menu key mentioned above.
+- `SYMB`/`SRCH` is an abbreviation of `Symbol` (`符号`)/`Search`.
