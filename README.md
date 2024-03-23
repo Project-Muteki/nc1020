@@ -13,3 +13,14 @@ In the future, I may also branch off the NC1020 emulator used here into a standa
 ## Notes on the ROM format
 
 This port uses a simplified, slightly different ROM format than the typical one used by most emulators. They can be generated with the included script under scripts/gen_simplified.py.
+
+## Key binding
+
+![aaa](./docs/keymap.png)
+
+### Note
+
+- Trivial keys (i.e. alphabets, page up/down and arrow keys) are not explicitly labeled.
+- Keys labeled as `XXX` are currently unmapped.
+- The `MENU` key is the **function** menu (usually labeled as `功能` or roman numeral `I`), **not** the home menu.
+- The `SYMB`/`SRCH` key is an abbreviation for `Symbol` (`符号`)/`Search`.
