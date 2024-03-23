@@ -18,6 +18,10 @@ const char NOR_FILE[] = "nor.bin";
 const char BBS_FILE[] = "bbs.bin";
 const char STATE_FILE[] = "nc1020.sts";
 
+// Reserve 1MB on the heap so we don't get an OOM in case OS is allocating short-lived objects on heap.
+// 1MiB seems reasonable but this may needs to be adjusted further if it's proven to not be enough.
+constexpr size_t HEAP_RESERVED = 1024 * 1024;
+
 const uint8_t KEYMAP_0x01[7] = {0x3b, 0x3f, 0x1a, 0x1f, 0x1b, 0x37, 0x1e}; // KEY_ESC - KEY_PGDN
 const uint8_t KEYMAP_ALPHABETS[26] = {
     0x28, 0x34, 0x32, 0x2a, 0x22, 0x2b, 0x2c, 0x2d, 0x27, 0x2e, 0x2f, 0x19, 0x36,
@@ -39,6 +43,11 @@ struct CacheBlock {
     uint8_t page;
     uint8_t data[0x8000];
 };
+
+// 1 cache block and a pointer.
+constexpr size_t CACHE_OVERHEAD_UNIT = sizeof(CacheBlock) + 4;
+// 3 ROM volumes and NOR pages
+constexpr size_t MAX_CACHE_SIZE = 0x80 * 3 + 0x20;
 
 class WqxHalBesta : public wqx::IWqxHal {
 public:
@@ -461,9 +470,24 @@ int main() {
         fb->palette[1] = 0x000000;
     }
 
-    hal.begin(96);
+    size_t heap_space = GetFreeMemory();
+    if (heap_space <= HEAP_RESERVED) {
+        _lfree(fb);
+        return 1;
+    }
+    size_t allowed_cache_size = (heap_space - HEAP_RESERVED) / CACHE_OVERHEAD_UNIT;
+    // Not enough memory
+    if (allowed_cache_size == 0) {
+        _lfree(fb);
+        return 1;
+    }
+
+    // Allocate the cache
+    size_t final_cache_size = (allowed_cache_size > MAX_CACHE_SIZE) ? MAX_CACHE_SIZE : allowed_cache_size;
+    hal.begin(final_cache_size);
 
     if (!hal.ensureOpen()) {
+        _lfree(fb);
         return 1;
     }
 
