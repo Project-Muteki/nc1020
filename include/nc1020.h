@@ -89,7 +89,7 @@ public:
     virtual bool loadState(char *states, size_t size) = 0;
 };
 
-extern void Initialize(IWqxHal *);
+extern void Initialize(IWqxHal *, uint32_t);
 extern void Reset();
 extern void SetKey(uint8_t, bool);
 extern void ReleaseAllKeys();

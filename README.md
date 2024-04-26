@@ -8,6 +8,36 @@ This is a port of the ["cross-platform" version of NC1020 emulator](https://gith
 
 In the future, I may also branch off the NC1020 emulator used here into a standalone library (à la TamaLIB) so it can be easily ported to even more platforms, potentially including bare-metal targets.
 
+## Configuration file
+
+You can create an optional configuration file in the same directory as the main EXE file to control various behaviors of the emulator. A template to get you started:
+
+```dosini
+[Hacks]
+; Control guest CPU speed override
+;
+; This slows down the program execution to ease host CPU load but keep the tick
+; speed close to real time. The emulator will adjust the tick rate accordingly
+; so the guest program will still tick at a consistent speed (i.e. RTC or other
+; timings will still run at the correct speed). Set this to a lower value when
+; you are experiencing slowdowns on underpowered hardware.
+;
+; When unset or set to 0, the default speed will be used (i.e. 5120000Hz).
+;
+; It's recommended to set this to 2176000 on BA110 and alike.
+CPUSpeed = 0
+
+; Limit the page cache size (in increments of ~32KiB)
+;
+; When this is unset or set to 0, the cache size will be automatically
+; calculated based on available free memory. You can limit the value further
+; by using this option.
+;
+; Note that this will not be able to override the hard size limit determined by
+; the emulator based on current amount of free heap space.
+CacheSizeLimit = 0
+```
+
 ## Notes on the ROM format
 
 This port uses a simplified, slightly different ROM format than the typical one used by the official emulator and most 3rd-party emulators. They can be generated with the included script under `scripts/gen_simplified.py` from official emulator ROM files.

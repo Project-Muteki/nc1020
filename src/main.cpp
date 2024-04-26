@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <muteki/file.h>
+#include <muteki/ini.h>
 #include <muteki/memory.h>
 #include <muteki/system.h>
 #include <muteki/threading.h>
@@ -17,6 +18,7 @@ const char ROM_FILE[] = "rom.bin";
 const char NOR_FILE[] = "nor.bin";
 const char BBS_FILE[] = "bbs.bin";
 const char STATE_FILE[] = "nc1020.sts";
+const char CONFIG_FILE[] = "nc1020.ini";
 
 // Reserve 1MB on the heap so we don't get an OOM in case OS is allocating short-lived objects on heap.
 // 1MiB seems reasonable but this may needs to be adjusted further if it's proven to not be enough.
@@ -455,12 +457,16 @@ int main() {
     rgbSetBkColor(0xffffff);
     ClearScreen(false);
 
+    // Parse config file
+    auto cpu_speed = _GetPrivateProfileInt("Hacks", "CPUSpeed", 0, CONFIG_FILE);
+    auto cache_size_conf = _GetPrivateProfileInt("Hacks", "CacheSizeLimit", 0, CONFIG_FILE);
+
     ticker_event = OSCreateEvent(0, 0);
 
     size_t allocSize = GetImageSizeExt(160, 80, 1);
     lcd_surface_t *fb = reinterpret_cast<lcd_surface_t *>(lcalloc(1, allocSize));
     InitGraphic(fb, 160, 80, 1);
-    
+
     lcd_t *lcd = GetActiveLCD();
     short offsetx = (lcd->width - fb->width) / 2;
     short offsety = (lcd->height - fb->height) / 2;
@@ -483,7 +489,13 @@ int main() {
     }
 
     // Allocate the cache
-    size_t final_cache_size = (allowed_cache_size > MAX_CACHE_SIZE) ? MAX_CACHE_SIZE : allowed_cache_size;
+    size_t final_cache_size;
+    if (cache_size_conf == 0) {
+        final_cache_size = (allowed_cache_size > MAX_CACHE_SIZE) ? MAX_CACHE_SIZE : allowed_cache_size;
+    } else {
+        final_cache_size = (cache_size_conf > MAX_CACHE_SIZE) ? MAX_CACHE_SIZE : cache_size_conf;
+    }
+
     hal.begin(final_cache_size);
 
     if (!hal.ensureOpen()) {
@@ -491,7 +503,7 @@ int main() {
         return 1;
     }
 
-    wqx::Initialize(&hal);
+    wqx::Initialize(&hal, cpu_speed);
     wqx::LoadNC1020();
 
     // Set up "spam key press as key down" handler
@@ -510,7 +522,8 @@ int main() {
         // TODO draw a bar for the tick counter
         if (pressing0 == KEY_HOME) {
             quit_ticks++;
-            // 20 (~600ms) seems to be reliable. More than this and it'd sometimes lose track on BA110.
+            // 20 (~600ms) seems to be (somewhat) reliable. More than this and the quit condition may never be
+            // triggered on BA110.
             if (quit_ticks >= 20) {
                 break;
             }
@@ -533,7 +546,7 @@ int main() {
         // TODO handle the LCD graphic segments (the 7seg counter, icons, scroll bar, etc.)
         ShowGraphic(offsetx, offsety, fb, BLIT_NONE);
     }
-    
+
     // Drain all problematic events that might raise and revert to normal key press behavior
     SetSysKeyState(&KEY_EVENT_CONFIG_DRAIN);
     SetTimer1IntHandler(NULL, 0);

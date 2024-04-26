@@ -15,8 +15,9 @@ include_dir = include_directories('include')
 elf = executable('nc1020',
     'src/main.cpp',
     'src/nc1020.cpp',
-    install : false,
-    include_directories : include_dir)
+    name_suffix: 'elf',
+    install: false,
+    include_directories: include_dir)
 
 custom_target('nc1020-bestape',
     input: elf,

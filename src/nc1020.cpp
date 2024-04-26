@@ -7,18 +7,10 @@
 namespace wqx {
     using std::string;
     
-    // cpu cycles per second (cpu freq).
+    // default cpu cycles per second (cpu freq).
     const uint32_t CYCLES_SECOND = 5120000;
     const uint32_t TIMER0_FREQ = 2;
     const uint32_t TIMER1_FREQ = 0x100;
-    // cpu cycles per timer0 period (1/2 s).
-    const uint32_t CYCLES_TIMER0 = CYCLES_SECOND / TIMER0_FREQ;
-    // cpu cycles per timer1 period (1/256 s).
-    const uint32_t CYCLES_TIMER1 = CYCLES_SECOND / TIMER1_FREQ;
-    // speed up
-    const uint32_t CYCLES_TIMER1_SPEED_UP = CYCLES_SECOND / TIMER1_FREQ / 20;
-    // cpu cycles per ms (1/1000 s).
-    const uint32_t CYCLES_MS = CYCLES_SECOND / 1000;
     
     static const uint32_t ROM_SIZE = 0x8000 * 0x300;
     static const uint32_t NOR_SIZE = 0x8000 * 0x20;
@@ -33,6 +25,16 @@ namespace wqx {
     const uint16_t IRQ_VEC = 0xFFFE;
     
     const uint32_t VERSION = 0x06;
+
+    // Runtime timing settings
+    // cpu cycles per timer0 period (1/2 s).
+    uint32_t cycles_timer0 = 0;
+    // cpu cycles per timer1 period (1/256 s).
+    uint32_t cycles_timer1 = 0;
+    // speed up
+    uint32_t cycles_timer1_speed_up = 0;
+    // cpu cycles per ms (1/1000 s).
+    uint32_t cycles_ms = 0;
 
 typedef struct {
 	uint16_t reg_pc;
@@ -547,7 +549,7 @@ inline void Store(uint16_t addr, uint8_t value) {
     //printf("error occurs when operate in flash!");
 }
 
-void Initialize(IWqxHal *halImpl) {
+void Initialize(IWqxHal *halImpl, uint32_t cpu_speed_override) {
 	hal = halImpl;
 	for (uint32_t i=0; i<0x40; i++) {
 		io_read[i] = ReadXX;
@@ -567,6 +569,16 @@ void Initialize(IWqxHal *halImpl) {
 	io_write[0x20] = Write20;
 	io_write[0x23] = Write23;
 	io_write[0x3F] = Write3F;
+
+        uint32_t cpu_speed = (cpu_speed_override == 0) ? CYCLES_SECOND : cpu_speed_override;
+        cycles_timer0 = cpu_speed / TIMER0_FREQ;
+        // cpu cycles per timer1 period (1/256 s).
+        cycles_timer1 = cpu_speed / TIMER1_FREQ;
+        // speed up
+        cycles_timer1_speed_up = cpu_speed / TIMER1_FREQ / 20;
+        // cpu cycles per ms (1/1000 s).
+        cycles_ms = cpu_speed / 1000;
+
 //#ifdef DEBUG
 //	FILE* file = fopen((nc1020_dir + "/wqxsimlogs.bin").c_str(), "rb");
 //	fseek(file, 0L, SEEK_END);
@@ -618,8 +630,8 @@ void ResetStates(){
 	reg_y = 0;
 	reg_sp = 0xFF;
 	reg_pc = PeekW(RESET_VEC);
-	timer0_cycles = CYCLES_TIMER0;
-	timer1_cycles = CYCLES_TIMER1;
+	timer0_cycles = cycles_timer0;
+	timer1_cycles = cycles_timer1;
 
 //#ifdef DEBUG
 //	executed_insts = 0;
@@ -701,7 +713,7 @@ bool CopyLcdBuffer(uint8_t* buffer){
 }
 
 void RunTimeSlice(uint32_t time_slice, bool speed_up) {
-	uint32_t end_cycles = time_slice * CYCLES_MS;
+	uint32_t end_cycles = time_slice * cycles_ms;
 	register uint32_t cycles = wqx::cycles;
 	register uint16_t reg_pc = wqx::reg_pc;
 	register uint8_t reg_a = wqx::reg_a;
@@ -2485,7 +2497,7 @@ void RunTimeSlice(uint32_t time_slice, bool speed_up) {
 //		}
 //#else
 		if (cycles >= timer0_cycles) {
-			timer0_cycles += CYCLES_TIMER0;
+			timer0_cycles += cycles_timer0;
 			timer0_toggle = !timer0_toggle;
 			if (!timer0_toggle) {
 				AdjustTime();
@@ -2510,9 +2522,9 @@ void RunTimeSlice(uint32_t time_slice, bool speed_up) {
 		}
 		if (cycles >= timer1_cycles) {
 			if (speed_up) {
-				timer1_cycles += CYCLES_TIMER1_SPEED_UP;
+				timer1_cycles += cycles_timer1_speed_up;
 			} else {
-				timer1_cycles += CYCLES_TIMER1;
+				timer1_cycles += cycles_timer1;
 			}
 			clock_buff[4] ++;
 			if (should_wake_up) {
@@ -2529,8 +2541,8 @@ void RunTimeSlice(uint32_t time_slice, bool speed_up) {
 	}
 
 	cycles -= end_cycles;
-	timer0_cycles -= end_cycles;
-	timer1_cycles -= end_cycles;
+	timer0_cycles = (end_cycles > timer0_cycles) ? 0 : (timer0_cycles - end_cycles);
+	timer1_cycles = (end_cycles > timer1_cycles) ? 0 : (timer1_cycles - end_cycles);
 
 	wqx::reg_pc = reg_pc;
 	wqx::reg_a = reg_a;
