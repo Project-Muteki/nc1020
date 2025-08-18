@@ -3,13 +3,17 @@
 #include <cstring>
 #include <cstdint>
 #include <cstdlib>
-#include <muteki/file.h>
+#include <cstdio>
+#include <cstdarg>
 #include <muteki/ini.h>
 #include <muteki/memory.h>
 #include <muteki/system.h>
 #include <muteki/threading.h>
 #include <muteki/ui/canvas.h>
 #include <muteki/ui/event.h>
+#include <muteki/ui/surface.h>
+
+#include <osdep/abi.h>
 
 const key_press_event_config_t KEY_EVENT_CONFIG_DRAIN = {65535, 65535, 1};
 const key_press_event_config_t KEY_EVENT_CONFIG_TURBO = {0, 0, 0};
@@ -71,9 +75,9 @@ private:
     void setRomCacheIndex(uint32_t volume, uint32_t page, unsigned short index);
     CacheBlock *claimPage(unsigned short cacheIndex);
 
-    void *romFile;
-    void *norFile;
-    void *bbsFile;
+    FILE *romFile;
+    FILE *norFile;
+    FILE *bbsFile;
     size_t firstOut;
     size_t cacheSize;
     int8_t currentMappedNorPage;
@@ -93,8 +97,8 @@ WqxHalBesta::WqxHalBesta(): romFile(nullptr), norFile(nullptr), bbsFile(nullptr)
                             romIndexHigh{0}, norIndexLow{0}, norIndexHigh(0xffffffff), bbsCache{0} {}
 
 bool WqxHalBesta::begin(size_t cacheSize) {
-    cacheBlock = reinterpret_cast<CacheBlock *>(lmalloc(cacheSize * sizeof(CacheBlock)));
-    cacheBlockTable = reinterpret_cast<CacheBlock **>(lcalloc(1, sizeof(CacheBlock *) * cacheSize));
+    cacheBlock = reinterpret_cast<CacheBlock *>(malloc(cacheSize * sizeof(CacheBlock)));
+    cacheBlockTable = reinterpret_cast<CacheBlock **>(calloc(1, sizeof(CacheBlock *) * cacheSize));
     std::memset(romIndexLow, 0xff, sizeof(romIndexLow));
     std::memset(romIndexHigh, 0xff, sizeof(romIndexHigh));
     std::memset(norIndexLow, 0xff, sizeof(norIndexLow));
@@ -153,8 +157,8 @@ CacheBlock *WqxHalBesta::claimPage(unsigned short cacheIndex) {
         if (cachedPage->flags & FLAG_NOR_DIRTY) {
             //Printf("uncommitted ");
             // Previously used as a NOR page with uncommitted changes.
-            __fseek(norFile, cachedPage->page * 0x8000, _SYS_SEEK_SET);
-            _fwrite(cachedPage->data, 1, 0x8000, norFile);
+            fseek(norFile, cachedPage->page * 0x8000, SEEK_SET);
+            fwrite(cachedPage->data, 1, 0x8000, norFile);
         };
         //Printf("NOR\n");
         setNorCacheIndex(cachedPage->page, CACHE_INDEX_UNUSED);
@@ -188,8 +192,8 @@ bool WqxHalBesta::loadNorPage(uint32_t page) {
         claimedPage->flags = FLAG_NOR;
         claimedPage->page = page;
         this->page = claimedPage->data;
-        __fseek(norFile, page * 0x8000, _SYS_SEEK_SET);
-        if (_fread(this->page, 1, 0x8000, norFile) != 0x8000) {
+        fseek(norFile, page * 0x8000, SEEK_SET);
+        if (fread(this->page, 1, 0x8000, norFile) != 0x8000) {
             return false;
         }
         firstOut++;
@@ -216,7 +220,7 @@ bool WqxHalBesta::saveNorPage(uint32_t page) {
 }
 
 bool WqxHalBesta::wipeNorFlash() {
-    char *fill = reinterpret_cast<char *>(lmalloc(512));
+    char *fill = reinterpret_cast<char *>(malloc(512));
     if (fill == nullptr) {
         return false;
     }
@@ -236,9 +240,9 @@ bool WqxHalBesta::wipeNorFlash() {
     // 0xff fill the NOR flash image
     std::memset(fill, 0xff, 512);
     for (size_t i = 0; i < 2048; i++) {
-        _fwrite(fill, 1, 512, norFile);
+        fwrite(fill, 1, 512, norFile);
     }
-    _lfree(fill);
+    free(fill);
     return true;
 }
 
@@ -264,8 +268,8 @@ bool WqxHalBesta::loadRomPage(uint32_t volume, uint32_t page) {
         claimedPage->flags = volume;
         claimedPage->page = page;
         this->page = claimedPage->data;
-        __fseek(romFile, (volume * 0x80 + page) * 0x8000, _SYS_SEEK_SET);
-        if (_fread(this->page, 1, 0x8000, romFile) != 0x8000) {
+        fseek(romFile, (volume * 0x80 + page) * 0x8000, SEEK_SET);
+        if (fread(this->page, 1, 0x8000, romFile) != 0x8000) {
             return false;
         }
         firstOut++;
@@ -291,35 +295,35 @@ bool WqxHalBesta::loadBbsPage(uint32_t volume, uint32_t page) {
 }
 
 bool WqxHalBesta::saveState(const char *states, size_t size) {
-    void *statesFile = _afopen(STATE_FILE, "wb+");
+    FILE *statesFile = fopen(STATE_FILE, "wb");
     if (statesFile == nullptr) {
         return false;
     }
-    _fwrite(states, 1, size, statesFile);
-    _fclose(statesFile);
+    fwrite(states, 1, size, statesFile);
+    fclose(statesFile);
     return true;
 }
 
 bool WqxHalBesta::loadState(char *states, size_t size) {
-    void *statesFile = _afopen(STATE_FILE, "rb");
+    FILE *statesFile = fopen(STATE_FILE, "rb");
     if (statesFile == nullptr) {
         return false;
     }
-    _fread(states, 1, size, statesFile);
-    _fclose(statesFile);
+    fread(states, 1, size, statesFile);
+    fclose(statesFile);
     return true;
 }
 
 bool WqxHalBesta::ensureOpen() {
     if (norFile == nullptr) {
-        norFile = _afopen(NOR_FILE, "rb+");
+        norFile = fopen(NOR_FILE, "rb+");
     }
     if (romFile == nullptr) {
-        romFile = _afopen(ROM_FILE, "rb");
+        romFile = fopen(ROM_FILE, "rb");
     }
     if (bbsFile == nullptr) {
-        bbsFile = _afopen(BBS_FILE, "rb");
-        _fread(bbsCache, 1, sizeof(bbsCache), bbsFile);
+        bbsFile = fopen(BBS_FILE, "rb");
+        fread(bbsCache, 1, sizeof(bbsCache), bbsFile);
         this->shadowBbs = &bbsCache[0x2000];
     }
     if (norFile == nullptr || romFile == nullptr || bbsFile == nullptr) {
@@ -342,30 +346,30 @@ void WqxHalBesta::closeAll() {
         if (index != CACHE_INDEX_UNUSED) {
             auto block = cacheBlockTable[index];
             if (block != nullptr && block->flags & FLAG_NOR_DIRTY) {
-                __fseek(norFile, block->page * 0x8000, _SYS_SEEK_SET);
-                _fwrite(block->data, 1, 0x8000, norFile);
+                fseek(norFile, block->page * 0x8000, SEEK_SET);
+                fwrite(block->data, 1, 0x8000, norFile);
                 block->flags &= ~FLAG_NOR_DIRTY;
             }
         }
     }
     if (norFile != nullptr) {
-        _fclose(norFile);
+        fclose(norFile);
         norFile = nullptr;
     }
     if (romFile != nullptr) {
-        _fclose(romFile);
+        fclose(romFile);
         romFile = nullptr;
     }
     if (bbsFile != nullptr) {
-        _fclose(bbsFile);
+        fclose(bbsFile);
         bbsFile = nullptr;
     }
     if (cacheBlock != nullptr) {
-        _lfree(cacheBlock);
+        free(cacheBlock);
         cacheBlock = nullptr;
     }
     if (cacheBlockTable != nullptr) {
-        _lfree(cacheBlockTable);
+        free(cacheBlockTable);
         cacheBlockTable = nullptr;
     }
 }
@@ -380,27 +384,34 @@ static inline bool test_events_no_shift(ui_event_t *uievent) {
     return TestPendEvent(uievent) || TestKeyEvent(uievent);
 }
 
-void ext_ticker() {
-    static auto uievent = ui_event_t();
-    bool hit = false;
+extern "C" {
+APCS_WRAPPER_STATIC(tick_thread, args, int, void *user_data) {
+    (void) args;
+    while (1) {
+        static auto uievent = ui_event_t();
+        bool hit = false;
 
-    // TODO this still seem to lose track presses on BA110. Find out why.
-    while (test_events_no_shift(&uievent)) {
-        hit = true;
-        if (GetEvent(&uievent) && uievent.event_type == 0x10) {
-            pressing0 = uievent.key_code0;
-            pressing1 = uievent.key_code1;
-        } else {
-            ClearEvent(&uievent);
+        // TODO this still seem to lose track presses on BA110. Find out why.
+        while (test_events_no_shift(&uievent)) {
+            hit = true;
+            if (GetEvent(&uievent) && uievent.event_type == 0x10) {
+                pressing0 = uievent.key_code0;
+                pressing1 = uievent.key_code1;
+            } else {
+                ClearEvent(&uievent);
+            }
         }
-    }
 
-    if (!hit) {
-        pressing0 = 0;
-        pressing1 = 0;
-    }
+        if (!hit) {
+            pressing0 = 0;
+            pressing1 = 0;
+        }
 
-    OSSetEvent(ticker_event);
+        OSSetEvent(ticker_event);
+        OSSleep(30);
+    }
+    return 0;
+}
 }
 
 void drain_all_events() {
@@ -453,6 +464,7 @@ short map_key_binding(short key) {
 int main() {
     auto old_hold_cfg = key_press_event_config_t();
     uint32_t quit_ticks = 0;
+    thread_t *thr = nullptr;
 
     rgbSetBkColor(0xffffff);
     ClearScreen(false);
@@ -464,7 +476,7 @@ int main() {
     ticker_event = OSCreateEvent(0, 0);
 
     size_t allocSize = GetImageSizeExt(160, 80, 1);
-    lcd_surface_t *fb = reinterpret_cast<lcd_surface_t *>(lcalloc(1, allocSize));
+    lcd_surface_t *fb = reinterpret_cast<lcd_surface_t *>(calloc(1, allocSize));
     InitGraphic(fb, 160, 80, 1);
 
     lcd_t *lcd = GetActiveLCD();
@@ -478,13 +490,13 @@ int main() {
 
     size_t heap_space = GetFreeMemory();
     if (heap_space <= HEAP_RESERVED) {
-        _lfree(fb);
+        free(fb);
         return 1;
     }
     size_t allowed_cache_size = (heap_space - HEAP_RESERVED) / CACHE_OVERHEAD_UNIT;
     // Not enough memory
     if (allowed_cache_size == 0) {
-        _lfree(fb);
+        free(fb);
         return 1;
     }
 
@@ -499,7 +511,7 @@ int main() {
     hal.begin(final_cache_size);
 
     if (!hal.ensureOpen()) {
-        _lfree(fb);
+        free(fb);
         return 1;
     }
 
@@ -508,19 +520,19 @@ int main() {
 
     // Set up "spam key press as key down" handler
     GetSysKeyState(&old_hold_cfg);
-    SetTimer1IntHandler(&ext_ticker, 3);
+    thr = OSCreateThread(&tick_thread, nullptr, 8192, false);
     SetSysKeyState(&KEY_EVENT_CONFIG_TURBO);
 
     while (true) {
         if (OSWaitForEvent(ticker_event, 10000) != WAIT_RESULT_RESOLVED) {
             OSCloseEvent(ticker_event);
             hal.closeAll();
-            _lfree(fb);
+            free(fb);
             return 1;
         }
 
         // TODO draw a bar for the tick counter
-        if (pressing0 == KEY_HOME) {
+        if (pressing0 == KEY_HOME || pressing1 == KEY_HOME) {
             quit_ticks++;
             // 20 (~600ms) seems to be (somewhat) reliable. More than this and the quit condition may never be
             // triggered on BA110.
@@ -549,13 +561,16 @@ int main() {
 
     // Drain all problematic events that might raise and revert to normal key press behavior
     SetSysKeyState(&KEY_EVENT_CONFIG_DRAIN);
-    SetTimer1IntHandler(NULL, 0);
+    if (thr != nullptr) {
+        OSTerminateThread(thr, 0);
+        thr = nullptr;
+    }
     drain_all_events();
     SetSysKeyState(&old_hold_cfg);
 
     wqx::SaveNC1020();
     OSCloseEvent(ticker_event);
     hal.closeAll();
-    _lfree(fb);
+    free(fb);
     return 0;
 }
